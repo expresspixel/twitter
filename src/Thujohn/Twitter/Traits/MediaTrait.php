@@ -40,6 +40,8 @@ Trait MediaTrait {
 	 */
 	public function uploadMediaChunked( $parameters = [], $chunk_size = null )
 	{
+
+			
 		$chunk_size = $chunk_size ?: ( 1024 * 1024 );
 
 		if ( !array_key_exists( 'media_file', $parameters ) )
@@ -53,11 +55,11 @@ Trait MediaTrait {
 		}
 
 		// Initialize upload
-
 		$init_result = $this->post( 'media/upload', [
 			'command' => 'INIT',
 			'media_type' => $this->getFileMime( $parameters['media_file'] ),
-			'total_bytes' => filesize($parameters['media_file'])
+			'total_bytes' => filesize($parameters['media_file']),
+			'media_category' => $parameters['media_category'],
 		], true );
 
 		if ( isset($init_result->errors) )
@@ -95,13 +97,42 @@ Trait MediaTrait {
 		fclose( $handle );
 
 		// Finalize transfer
-
-		$fin_result = $this->post( 'media/upload', [
+		$status_result = $this->post( 'media/upload', [
 			'command' => 'FINALIZE',
 			'media_id' => $init_result->media_id_string
 		], true );
+		
+		if($status_result->processing_info->state == 'pending') {
+			sleep($status_result->processing_info->check_after_secs);
+		}
+		
+		$is_pending = true;
+		while($is_pending) {
+			
+			//uses TwitterAPIExchange
+			$settings = array(
+			  'oauth_access_token' => $parameters['token'],
+			  'oauth_access_token_secret' => $parameters['secret'],
+			  'consumer_key' => env('TWITTER_CONSUMER_KEY'),
+			  'consumer_secret' => env('TWITTER_CONSUMER_SECRET')
+			);
+			$url = 'https://upload.twitter.com/1.1/media/upload.json';
+			$getfield = '?media_id='.$status_result->media_id.'&command=STATUS';
+			$requestMethod = 'GET';
+			$twitter = new \TwitterAPIExchange($settings);
+			$status_result = $twitter->setGetfield($getfield)
+			  ->buildOauth($url, $requestMethod)
+			  ->performRequest();
+			$status_result = json_decode($status_result);
+			
+			if($status_result->processing_info->state == 'pending') {
+				sleep($status_result->processing_info->check_after_secs);
+			} else {
+				$is_pending = false;
+			}			
+		}
 
-		return $fin_result;
+		return $status_result;
 	}
 
 	/**
